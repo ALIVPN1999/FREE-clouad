@@ -9,6 +9,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
+
       - name: Enable Remote Desktop
         shell: powershell
         run: |
@@ -24,6 +25,8 @@ jobs:
 
           Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
 
+          Write-Host "Remote Desktop enabled."
+
       - name: Create RDP User
         shell: powershell
         run: |
@@ -34,7 +37,8 @@ jobs:
                 -Name "PARSA124" `
                 -Password $Password `
                 -PasswordNeverExpires
-          } else {
+          }
+          else {
               Set-LocalUser `
                 -Name "PARSA124" `
                 -Password $Password
@@ -45,37 +49,102 @@ jobs:
             -Member "PARSA124" `
             -ErrorAction SilentlyContinue
 
+          Write-Host "RDP user created."
+
+      - name: Get Server Public IP
+        shell: powershell
+        run: |
+          $IP = Invoke-RestMethod "https://api.ipify.org"
+
+          Write-Host ""
+          Write-Host "============================================"
+          Write-Host "         SERVER PUBLIC IP"
+          Write-Host "============================================"
+          Write-Host $IP
+          Write-Host "============================================"
+          Write-Host ""
+
       - name: Download Cloudflared
         shell: powershell
         run: |
           Invoke-WebRequest `
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+            -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
             -OutFile "C:\cloudflared.exe"
+
+          Write-Host "Cloudflared downloaded."
 
       - name: Start Cloudflare Tunnel
         shell: powershell
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
+          if (-not $env:CLOUDFLARE_TUNNEL_TOKEN) {
+              Write-Error "CLOUDFLARE_TUNNEL_TOKEN secret is missing!"
+              exit 1
+          }
+
           Start-Process `
             -FilePath "C:\cloudflared.exe" `
             -ArgumentList "tunnel --no-autoupdate run --token $env:CLOUDFLARE_TUNNEL_TOKEN" `
             -WindowStyle Hidden
 
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 15
 
-          Write-Host "========================================"
+          Write-Host ""
+          Write-Host "============================================"
           Write-Host "       CLOUDFLARE RDP IS READY"
-          Write-Host "========================================"
-          Write-Host "Hostname: rdp.pirpesar124.dpdns.org"
-          Write-Host "Username: PARSA124"
-          Write-Host "========================================"
+          Write-Host "============================================"
+          Write-Host "Hostname : rdp.pirpesar124.dpdns.org"
+          Write-Host "RDP User : PARSA124"
+          Write-Host "RDP Port : 3389"
+          Write-Host "============================================"
+          Write-Host ""
 
       - name: Check Cloudflared
         shell: powershell
         run: |
-          Start-Sleep -Seconds 5
-          Get-Process cloudflared -ErrorAction SilentlyContinue
+          $Process = Get-Process cloudflared -ErrorAction SilentlyContinue
+
+          if ($Process) {
+              Write-Host "Cloudflared is running."
+              Write-Host "PID: $($Process.Id)"
+          }
+          else {
+              Write-Error "Cloudflared is NOT running!"
+              exit 1
+          }
+
+      - name: Check RDP Port
+        shell: powershell
+        run: |
+          $RDP = Get-NetTCPConnection `
+            -LocalPort 3389 `
+            -State Listen `
+            -ErrorAction SilentlyContinue
+
+          if ($RDP) {
+              Write-Host "RDP port 3389 is listening."
+          }
+          else {
+              Write-Error "RDP port 3389 is NOT listening!"
+              exit 1
+          }
+
+      - name: Server Information
+        shell: powershell
+        run: |
+          $IP = Invoke-RestMethod "https://api.ipify.org"
+
+          Write-Host ""
+          Write-Host "=================================================="
+          Write-Host "              WINDOWS RDP SERVER"
+          Write-Host "=================================================="
+          Write-Host "Public IP : $IP"
+          Write-Host "Hostname  : rdp.pirpesar124.dpdns.org"
+          Write-Host "Username  : PARSA124"
+          Write-Host "RDP Port  : 3389"
+          Write-Host "=================================================="
+          Write-Host ""
 
       - name: Keep Server Alive
         shell: powershell
