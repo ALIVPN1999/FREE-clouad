@@ -1,217 +1,70 @@
+https://tailscale.com/download
+.github/workflows/windows-rdp.yml
+
+
+
+
+----------------------------------------------
+
 name: Windows Cloud RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp:
+  build:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-
-      # ==========================================
-      # ENABLE RDP
-      # ==========================================
-      - name: Enable Remote Desktop
-        shell: powershell
+      - name: 1. Enable Remote Desktop & Firewall
         run: |
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name 'fDenyTSConnections' `
-            -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name 'UserAuthentication' `
-            -Value 1
-
-          Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
-
-          Restart-Service TermService -Force
-
-          Write-Host "============================================"
-          Write-Host "RDP ENABLED"
-          Write-Host "============================================"
-
-
-      # ==========================================
-      # CREATE RDP USER
-      # ==========================================
-      - name: Create RDP User
-        shell: powershell
+      - name: 2. Create Admin Account
         run: |
           $Password = ConvertTo-SecureString "PARSA@124" -AsPlainText -Force
+          New-LocalUser -Name "PARSA124" -Password $Password -PasswordNeverExpires -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators" -Member "PARSA124" -ErrorAction SilentlyContinue
+          net user runneradmin PARSA@124
 
-          if (-not (Get-LocalUser -Name "PARSA124" -ErrorAction SilentlyContinue)) {
-
-              New-LocalUser `
-                -Name "PARSA124" `
-                -Password $Password `
-                -PasswordNeverExpires `
-                -AccountNeverExpires
-
-          }
-          else {
-
-              Set-LocalUser `
-                -Name "PARSA124" `
-                -Password $Password
-
-          }
-
-          Add-LocalGroupMember `
-            -Group "Administrators" `
-            -Member "PARSA124" `
-            -ErrorAction SilentlyContinue
-
-          Write-Host "RDP USER: PARSA124"
-
-
-      # ==========================================
-      # CHECK RDP
-      # ==========================================
-      - name: Check RDP Port
-        shell: powershell
-        run: |
-          Start-Sleep -Seconds 5
-
-          $RDP = Get-NetTCPConnection `
-            -LocalPort 3389 `
-            -State Listen `
-            -ErrorAction SilentlyContinue
-
-          if ($RDP) {
-              Write-Host ""
-              Write-Host "============================================"
-              Write-Host "RDP PORT 3389 IS LISTENING"
-              Write-Host "============================================"
-          }
-          else {
-              Write-Error "RDP port 3389 is NOT listening!"
-              exit 1
-          }
-
-
-      # ==========================================
-      # PUBLIC IP
-      # ==========================================
-      - name: Get Server Public IP
-        shell: powershell
-        run: |
-          $IP = Invoke-RestMethod "https://api.ipify.org"
-
-          Write-Host ""
-          Write-Host "============================================"
-          Write-Host "SERVER PUBLIC IP"
-          Write-Host "============================================"
-          Write-Host $IP
-          Write-Host "============================================"
-
-
-      # ==========================================
-      # DOWNLOAD CLOUDFLARED
-      # ==========================================
-      - name: Download Cloudflared
-        shell: powershell
-        run: |
-          Invoke-WebRequest `
-            -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
-            -OutFile "C:\cloudflared.exe"
-
-          if (Test-Path "C:\cloudflared.exe") {
-              Write-Host "Cloudflared downloaded successfully."
-          }
-          else {
-              Write-Error "Cloudflared download failed!"
-              exit 1
-          }
-
-
-      # ==========================================
-      # START CLOUDFLARE TUNNEL
-      # ==========================================
-      - name: Start Cloudflare Tunnel
-        shell: powershell
+      - name: 3. Install & Connect Tailscale VPN
         env:
-          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-
-          if (-not $env:CLOUDFLARE_TUNNEL_TOKEN) {
-              Write-Error "CLOUDFLARE_TUNNEL_TOKEN secret is missing!"
-              exit 1
-          }
-
+          # Download and install Tailscale silently
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "C:\tailscale.msi"
+          Start-Process msiexec -ArgumentList "/i C:\tailscale.msi /quiet /norestart" -Wait
+          
+          # Connect to Tailscale network
+          Start-Sleep -Seconds 5
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="github-rdp-server"
+          
+          Start-Sleep -Seconds 8
+          
+          # Get Tailscale IP
+          $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          
           Write-Host ""
-          Write-Host "Starting Cloudflare Tunnel..."
+          Write-Host "==================================================" -ForegroundColor Green
+          Write-Host "  >>> RDP SERVER IS READY! <<<" -ForegroundColor Cyan
+          Write-Host "  Tailscale IP : $ts_ip" -ForegroundColor Yellow
+          Write-Host "  Username     : PARSA124" -ForegroundColor Yellow
+          Write-Host "  Password     : PARSA@124" -ForegroundColor Yellow
+          Write-Host "  >> Open mstsc and connect to: $ts_ip" -ForegroundColor Magenta
+          Write-Host "==================================================" -ForegroundColor Green
 
-          Start-Process `
-            -FilePath "C:\cloudflared.exe" `
-            -ArgumentList "tunnel --no-autoupdate run --token $env:CLOUDFLARE_TUNNEL_TOKEN" `
-            -WindowStyle Hidden
-
-          Start-Sleep -Seconds 15
-
-          $Process = Get-Process cloudflared -ErrorAction SilentlyContinue
-
-          if ($Process) {
-
-              Write-Host ""
-              Write-Host "============================================"
-              Write-Host "CLOUDFLARE TUNNEL IS RUNNING"
-              Write-Host "============================================"
-              Write-Host "PID: $($Process.Id)"
-              Write-Host "============================================"
-
-          }
-          else {
-
-              Write-Error "Cloudflared is NOT running!"
-              exit 1
-
-          }
-
-
-      # ==========================================
-      # FINAL SERVER INFORMATION
-      # ==========================================
-      - name: Server Information
-        shell: powershell
+      - name: 4. Keep Server Alive (6 Hours)
         run: |
-
-          $IP = Invoke-RestMethod "https://api.ipify.org"
-
-          Write-Host ""
-          Write-Host "=================================================="
-          Write-Host "              WINDOWS RDP SERVER"
-          Write-Host "=================================================="
-          Write-Host ""
-          Write-Host "Public IP : $IP"
-          Write-Host "Hostname  : rdp.pirpesar124.dpdns.org"
-          Write-Host "Username  : PARSA124"
-          Write-Host "RDP Port  : 3389"
-          Write-Host ""
-          Write-Host "=================================================="
-          Write-Host "CLOUDFLARE TUNNEL"
-          Write-Host "=================================================="
-          Write-Host "Tunnel    : RUNNING"
-          Write-Host "RDP       : localhost:3389"
-          Write-Host "=================================================="
-          Write-Host ""
-
-
-      # ==========================================
-      # KEEP SERVER ALIVE
-      # ==========================================
-      - name: Keep Server Alive
-        shell: powershell
-        run: |
-
-          for ($i = 1; $i -le 340; $i++) {
-
-              Start-Sleep -Seconds 60
-
-              Write-Host "Server running: $i/340 minutes"
-
+          for ($i = 1; $i -le 360; $i++) {
+            Start-Sleep -Seconds 60
+            Write-Host "[$i/360] Server running..."
           }
+
+-------------------------------------------
+
+
+
+TAILSCALE_AUTHKEY
