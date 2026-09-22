@@ -1,11 +1,3 @@
-https://tailscale.com/download
-.github/workflows/windows-rdp.yml
-
-
-
-
-----------------------------------------------
-
 name: Windows Cloud RDP
 
 on:
@@ -62,9 +54,3 @@ jobs:
             Start-Sleep -Seconds 60
             Write-Host "[$i/360] Server running..."
           }
-
--------------------------------------------
-
-
-
-TAILSCALE_AUTHKEY
