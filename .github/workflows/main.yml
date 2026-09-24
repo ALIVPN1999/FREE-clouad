@@ -1,0 +1,61 @@
+name: Lightweight Windows-like Desktop (XFCE + XRDP + Tailscale)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  desktop-environment:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install XFCE Desktop & XRDP
+        run: |
+          sudo apt update
+          sudo apt install -y xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils
+          
+          # کانفیگ دسترسی‌ها و سرویس XRDP
+          sudo adduser xrdp ssl-cert
+          sudo systemctl enable xrdp
+
+      - name: Create Remote User & Fix Session Settings
+        run: |
+          # ساخت کاربر با نام PARSA و پسورد PARSA@124
+          sudo useradd -m -s /bin/bash PARSA
+          echo "PARSA:PARSA@124" | sudo chpasswd
+          sudo usermod -aG sudo PARSA
+          
+          # تنظیم دقیق جلسه کاری XFCE و D-Bus برای کاربر PARSA
+          sudo bash -c 'echo "export XDG_DATA_DIRS=/usr/share/xfce4:/usr/local/share:/usr/share" > /home/PARSA/.xsessionrc'
+          sudo bash -c 'echo "export XDG_CONFIG_DIRS=/etc/xdg" >> /home/PARSA/.xsessionrc'
+          sudo bash -c 'echo "exec startxfce4" >> /home/PARSA/.xsessionrc'
+          
+          echo "startxfce4" | sudo tee /home/PARSA/.xsession
+          
+          # اصلاح مالکیت فایل‌ها
+          sudo chown -R PARSA:PARSA /home/PARSA
+          
+          # ری‌استارت سرویس برای اعمال تغییرات
+          sudo service xrdp restart
+
+      - name: Install & Connect Tailscale
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=$TAILSCALE_AUTHKEY --accept-routes
+
+      - name: Print Connection Details & Keep Alive
+        run: |
+          echo "=================================================="
+          echo "🚀 Desktop Environment Ready!"
+          echo "=================================================="
+          echo "📌 Tailscale IP:"
+          tailscale ip -4
+          echo "--------------------------------------------------"
+          echo "👤 Username: PARSA"
+          echo "🔑 Password: PARSA@124"
+          echo "=================================================="
+          sleep 21600
