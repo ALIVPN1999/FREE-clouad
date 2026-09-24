@@ -1,0 +1,104 @@
+name: GitHub Actions Workstation - KDE Plasma + XRDP + Tailscale
+
+on:
+  workflow_dispatch: # Actions tab nundi manual ga run cheyadaniki
+
+jobs:
+  desktop-environment:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install KDE Plasma and XRDP
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            kde-plasma-desktop \
+            plasma-workspace \
+            konsole \
+            dbus-x11 \
+            x11-xserver-utils \
+            xterm \
+            xrdp \
+            xorgxrdp \
+            curl \
+            wget \
+            git \
+            python3-pip -qq
+
+      - name: Install and Setup Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --statedir=/tmp/tailscale > /tmp/tailscaled.log 2>&1 &
+          sleep 4
+          sudo tailscale up --auth-key=${TS_AUTHKEY} --hostname=github-kde --accept-dns=false
+          sleep 5
+          echo "Tailscale Status:"
+          sudo tailscale status
+          echo "Tailscale IPv4:"
+          sudo tailscale ip -4
+
+      - name: Setup XRDP User and Desktop Session
+        run: |
+          USERNAME="PARSA"
+          PASSWORD="PARSA@124"
+
+          # User lekapothe create cheyadanki
+          id -u $USERNAME >/dev/null 2>&1 || sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo $USERNAME
+
+          # User session config
+          sudo bash -c "cat > /home/$USERNAME/.xsession <<EOF
+          #!/bin/sh
+          export LANG=en_US.UTF-8
+          export LANGUAGE=en_US:en
+          export LC_ALL=en_US.UTF-8
+          export XDG_CURRENT_DESKTOP=KDE
+          export XDG_SESSION_DESKTOP=KDE
+          export KDE_FULL_SESSION=true
+          exec startplasma-x11
+          EOF"
+
+          sudo chmod +x /home/$USERNAME/.xsession
+          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
+
+          # XRDP system startup config
+          sudo bash -c 'cat > /etc/xrdp/startwm.sh <<EOF
+          #!/bin/sh
+          export LANG=en_US.UTF-8
+          export LANGUAGE=en_US:en
+          export LC_ALL=en_US.UTF-8
+          export XDG_CURRENT_DESKTOP=KDE
+          export XDG_SESSION_DESKTOP=KDE
+          export KDE_FULL_SESSION=true
+          exec startplasma-x11
+          EOF'
+
+          sudo chmod +x /etc/xrdp/startwm.sh
+          sudo service xrdp restart
+          sleep 5
+
+      - name: Print Connection Details and Keep Alive
+        run: |
+          echo "============================================================"
+          echo "            KDE + XRDP + TAILSCALE READY"
+          echo "============================================================"
+          echo "Tailscale IPv4:"
+          sudo tailscale ip -4
+          echo ""
+          echo "XRDP Port Check:"
+          ss -tlnp | grep 3389 || true
+          echo "============================================================"
+          echo "Connection Details:"
+          echo "RDP IP: (Pai unna Tailscale IPv4 vadandi)"
+          echo "Username: PARSA"
+          echo "Password: PARSA@124"
+          echo "============================================================"
+          
+          # Server stop avvakunda 6 gantalasatu (max GitHub limit) run avvadanki
+          sleep 21600
