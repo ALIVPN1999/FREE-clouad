@@ -1,185 +1,165 @@
-#!/usr/bin/env bash
+name: Linux XFCE Tailscale Server
 
-set -e
+on:
+  workflow_dispatch:
 
-echo "=============================================="
-echo " GitHub Codespaces"
-echo " XFCE + XRDP + Tailscale Installer"
-echo "=============================================="
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
 
-# -----------------------------------------------
-# 1. Check OS
-# -----------------------------------------------
+    steps:
 
-if [ ! -f /etc/os-release ]; then
-    echo "[ERROR] Unsupported Linux system."
-    exit 1
-fi
+      # ==========================================
+      # 1. Update system
+      # ==========================================
+      - name: Update Linux
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
-source /etc/os-release
+      # ==========================================
+      # 2. Install XFCE + XRDP
+      # ==========================================
+      - name: Install XFCE and XRDP
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xfce4 \
+            xfce4-goodies \
+            xfce4-terminal \
+            xrdp \
+            dbus-x11 \
+            policykit-1 \
+            curl \
+            wget \
+            git \
+            net-tools
 
-echo "[INFO] OS: $PRETTY_NAME"
+      # ==========================================
+      # 3. Create RDP user
+      # ==========================================
+      - name: Create RDP user
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          sudo useradd -m -s /bin/bash rdpuser || true
 
-# -----------------------------------------------
-# 2. Update
-# -----------------------------------------------
+          echo "rdpuser:${RDP_PASSWORD}" | sudo chpasswd
 
-echo
-echo "[1/9] Updating packages..."
+          sudo usermod -aG sudo rdpuser
+          sudo usermod -aG ssl-cert rdpuser
 
-sudo apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+          sudo -u rdpuser bash -c 'echo "startxfce4" > ~/.xsession'
+          sudo -u rdpuser chmod +x /home/rdpuser/.xsession
 
-# -----------------------------------------------
-# 3. Install XFCE
-# -----------------------------------------------
+      # ==========================================
+      # 4. Configure XRDP
+      # ==========================================
+      - name: Configure XRDP
+        run: |
+          sudo cp /etc/xrdp/startwm.sh /etc/xrdp/startwm.sh.backup || true
 
-echo
-echo "[2/9] Installing XFCE..."
+          sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
+          #!/bin/sh
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    xfce4 \
-    xfce4-goodies \
-    xfce4-terminal \
-    dbus-x11 \
-    policykit-1
+          unset DBUS_SESSION_BUS_ADDRESS
+          unset XDG_RUNTIME_DIR
 
-# -----------------------------------------------
-# 4. Install XRDP
-# -----------------------------------------------
+          export XDG_CURRENT_DESKTOP=XFCE
+          export XDG_SESSION_DESKTOP=xfce
+          export DESKTOP_SESSION=xfce
 
-echo
-echo "[3/9] Installing XRDP..."
+          startxfce4
+          EOF
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    xrdp
+          sudo chmod +x /etc/xrdp/startwm.sh
 
-# -----------------------------------------------
-# 5. Configure XRDP
-# -----------------------------------------------
+          sudo sed -i 's/^max_bpp=.*/max_bpp=16/' /etc/xrdp/xrdp.ini || true
+          sudo sed -i 's/^xserverbpp=.*/xserverbpp=16/' /etc/xrdp/xrdp.ini || true
 
-echo
-echo "[4/9] Configuring XRDP..."
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
 
-sudo adduser xrdp ssl-cert || true
+          sleep 3
 
-sudo mkdir -p /etc/xrdp
+          sudo systemctl status xrdp --no-pager || true
 
-sudo cp /etc/xrdp/startwm.sh \
-    /etc/xrdp/startwm.sh.backup 2>/dev/null || true
+      # ==========================================
+      # 5. Install Tailscale
+      # ==========================================
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
 
-sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
-#!/bin/sh
+      # ==========================================
+      # 6. Start Tailscale
+      # ==========================================
+      - name: Start Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          sudo tailscaled \
+            --state=/tmp/tailscaled.state \
+            --socket=/tmp/tailscaled.sock \
+            > /tmp/tailscaled.log 2>&1 &
 
-unset DBUS_SESSION_BUS_ADDRESS
-unset XDG_RUNTIME_DIR
+          sleep 5
 
-export XDG_CURRENT_DESKTOP=XFCE
-export XDG_SESSION_DESKTOP=xfce
-export DESKTOP_SESSION=xfce
+          sudo tailscale \
+            --socket=/tmp/tailscaled.sock \
+            up \
+            --auth-key="${TS_AUTHKEY}" \
+            --hostname="github-xfce-${GITHUB_RUN_ID}"
 
-startxfce4
-EOF
+          sleep 5
 
-sudo chmod +x /etc/xrdp/startwm.sh
+      # ==========================================
+      # 7. Show connection information
+      # ==========================================
+      - name: Show Server Information
+        run: |
+          echo ""
+          echo "=============================================="
+          echo "        XFCE + XRDP + TAILSCALE"
+          echo "=============================================="
+          echo ""
 
-# -----------------------------------------------
-# 6. XRDP configuration
-# -----------------------------------------------
+          echo "TAILSCALE IP:"
+          sudo tailscale \
+            --socket=/tmp/tailscaled.sock \
+            ip -4
 
-echo
-echo "[5/9] Configuring XRDP settings..."
+          echo ""
+          echo "TAILSCALE STATUS:"
+          sudo tailscale \
+            --socket=/tmp/tailscaled.sock \
+            status
 
-sudo sed -i 's/^max_bpp=.*/max_bpp=16/' /etc/xrdp/xrdp.ini 2>/dev/null || true
+          echo ""
+          echo "XRDP:"
+          sudo systemctl status xrdp --no-pager || true
 
-sudo sed -i 's/^xserverbpp=.*/xserverbpp=16/' /etc/xrdp/xrdp.ini 2>/dev/null || true
+          echo ""
+          echo "PORT 3389:"
+          sudo ss -lntp | grep 3389 || true
 
-sudo systemctl enable xrdp || true
+          echo ""
+          echo "RDP USER:"
+          echo "rdpuser"
 
-sudo systemctl restart xrdp || true
+          echo ""
+          echo "=============================================="
 
-# -----------------------------------------------
-# 7. Tailscale
-# -----------------------------------------------
+      # ==========================================
+      # 8. Keep server alive
+      # ==========================================
+      - name: Keep Server Running
+        run: |
+          echo "Server is running..."
+          echo "Use the Tailscale IP shown above."
+          echo ""
 
-echo
-echo "[6/9] Installing Tailscale..."
-
-if ! command -v tailscale >/dev/null 2>&1; then
-    curl -fsSL https://tailscale.com/install.sh | sh
-else
-    echo "[INFO] Tailscale already installed."
-fi
-
-# -----------------------------------------------
-# 8. Create helper commands
-# -----------------------------------------------
-
-echo
-echo "[7/9] Creating helper commands..."
-
-sudo tee /usr/local/bin/xrdp-status > /dev/null <<'EOF'
-#!/bin/bash
-
-echo "========== XRDP =========="
-systemctl status xrdp --no-pager || true
-
-echo
-echo "========== Listening Port =========="
-ss -lntp | grep 3389 || true
-
-echo
-echo "========== Tailscale =========="
-tailscale status || true
-
-echo
-echo "========== Tailscale IP =========="
-tailscale ip -4 || true
-EOF
-
-sudo chmod +x /usr/local/bin/xrdp-status
-
-# -----------------------------------------------
-# 9. Finish
-# -----------------------------------------------
-
-echo
-echo "[8/9] Checking installation..."
-
-echo
-echo "XFCE:"
-which startxfce4 || true
-
-echo
-echo "XRDP:"
-which xrdp || true
-
-echo
-echo "Tailscale:"
-tailscale version || true
-
-echo
-echo "=============================================="
-echo " INSTALLATION COMPLETE"
-echo "=============================================="
-
-echo
-echo "[9/9] NEXT STEP"
-echo
-echo "Run:"
-echo
-echo "    sudo tailscale up"
-echo
-echo "Then:"
-echo
-echo "    tailscale ip -4"
-echo
-echo "You should get an address similar to:"
-echo
-echo "    100.x.x.x"
-echo
-echo "Then check XRDP with:"
-echo
-echo "    xrdp-status"
-echo
-echo "=============================================="
+          while true; do
+            echo "Server alive: $(date)"
+            sleep 300
+          done
